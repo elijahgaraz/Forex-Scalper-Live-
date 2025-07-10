@@ -256,10 +256,10 @@ class TradingPage(ttk.Frame):
         self.equity_var_tp = tk.StringVar(value="–")
 
         # configure grid
-        # Adjusted row count for new account info section
-        for r in range(12): # Increased range for new row
+        # Adjusted row count for new account info section AND data readiness label
+        for r in range(13): # Increased range for new row + data readiness
             self.rowconfigure(r, weight=0)
-        self.rowconfigure(12, weight=1) # Adjusted log row index
+        self.rowconfigure(13, weight=1) # Adjusted log row index
         self.columnconfigure(1, weight=1)
 
 
@@ -322,16 +322,24 @@ class TradingPage(ttk.Frame):
         strategy_names = ["Safe", "Moderate", "Aggressive", "Momentum", "Mean Reversion"]
         cb_strat = ttk.Combobox(self, textvariable=self.strategy_var, values=strategy_names, state="readonly")
         cb_strat.grid(row=7, column=1, sticky="ew") # Was row=6
+        cb_strat.bind("<<ComboboxSelected>>", lambda e: self._update_data_readiness_display(execute_now=True))
+
+
+        # Data Readiness Display
+        ttk.Label(self, text="Data Readiness:").grid(row=8, column=0, sticky="w", padx=(0,5), pady=(10,0))
+        self.data_readiness_var = tk.StringVar(value="Initializing...")
+        self.data_readiness_label = ttk.Label(self, textvariable=self.data_readiness_var)
+        self.data_readiness_label.grid(row=8, column=1, sticky="ew", pady=(10,0))
 
         # Start/Stop Scalping buttons
-        self.start_button = ttk.Button(self, text="Begin Scalping", command=self.start_scalping)
-        self.start_button.grid(row=8, column=0, columnspan=2, pady=(10,0)) # Was row=7
+        self.start_button = ttk.Button(self, text="Begin Scalping", command=self.start_scalping, state="disabled") # Initially disabled
+        self.start_button.grid(row=9, column=0, columnspan=2, pady=(10,0)) # Adjusted row
         self.stop_button  = ttk.Button(self, text="Stop Scalping", command=self.stop_scalping, state="disabled")
-        self.stop_button.grid(row=9, column=0, columnspan=2, pady=(5,0)) # Was row=8
+        self.stop_button.grid(row=10, column=0, columnspan=2, pady=(5,0)) # Adjusted row
 
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
-        stats.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(10,0)) # Was row=9
+        stats.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(10,0)) # Adjusted row
         stats.columnconfigure(1, weight=1)
 
         self.pnl_var       = tk.StringVar(value="0.00")
@@ -347,9 +355,9 @@ class TradingPage(ttk.Frame):
 
         # Output log
         self.output = tk.Text(self, height=8, wrap="word", state="disabled")
-        self.output.grid(row=12, column=0, columnspan=2, sticky="nsew", pady=(10,0)) # Was row=11
+        self.output.grid(row=13, column=0, columnspan=2, sticky="nsew", pady=(10,0)) # Adjusted row
         sb = ttk.Scrollbar(self, command=self.output.yview)
-        sb.grid(row=12, column=2, sticky="ns") # Was row=11
+        sb.grid(row=13, column=2, sticky="ns") # Adjusted row
         self.output.config(yscrollcommand=sb.set)
 
         # Internal counters
@@ -358,6 +366,80 @@ class TradingPage(ttk.Frame):
         self.wins         = 0
 
         # self.refresh_price() # Removed: Price will be refreshed when symbols are populated
+
+        self.after(1000, self._update_data_readiness_display) # Start the data readiness update loop
+
+
+    def _update_data_readiness_display(self, execute_now=False): # Added execute_now for immediate updates
+        # Check if trader is available and connected
+        if not self.trader or not hasattr(self.trader, 'is_connected') or not self.trader.is_connected:
+            self.data_readiness_var.set("Trader disconnected")
+            if hasattr(self, 'data_readiness_label'): # Check if label exists
+                self.data_readiness_label.config(foreground="gray")
+            if hasattr(self, 'start_button'):
+                self.start_button.config(state="disabled")
+            if not execute_now: # Schedule next call only if not an immediate execution
+                self.after(2000, self._update_data_readiness_display)
+            return
+
+        selected_strategy_name = self.strategy_var.get()
+        strategy_instance = None
+
+        # Instantiate the selected strategy to get its requirements
+        # This could be optimized by caching strategy instances or their requirements
+        if selected_strategy_name == "Safe": strategy_instance = SafeStrategy()
+        elif selected_strategy_name == "Moderate": strategy_instance = ModerateStrategy()
+        elif selected_strategy_name == "Aggressive": strategy_instance = AggressiveStrategy()
+        elif selected_strategy_name == "Momentum": strategy_instance = MomentumStrategy()
+        elif selected_strategy_name == "Mean Reversion": strategy_instance = MeanReversionStrategy()
+
+        if not strategy_instance:
+            self.data_readiness_var.set("Select a strategy")
+            if hasattr(self, 'data_readiness_label'):
+                self.data_readiness_label.config(foreground="black")
+            if hasattr(self, 'start_button'):
+                self.start_button.config(state="disabled")
+            if not execute_now:
+                self.after(1000, self._update_data_readiness_display)
+            return
+
+        required_bars_map = strategy_instance.get_required_bars()
+        available_bars_map = self.trader.get_ohlc_bar_counts()
+
+        status_messages = []
+        all_ready = True
+
+        if not required_bars_map: # Strategy might have no specific bar requirements
+            status_messages.append("No specific bar data required by strategy.")
+            all_ready = True
+        else:
+            for tf_to_check, required_count in required_bars_map.items():
+                available_count = available_bars_map.get(tf_to_check, 0)
+                status_messages.append(f"{tf_to_check}: {available_count}/{required_count}")
+                if available_count < required_count:
+                    all_ready = False
+
+        final_status_text = ", ".join(status_messages)
+        current_fg_color = "black" # Default
+
+        if all_ready:
+            final_status_text += " (Ready)"
+            current_fg_color = "green"
+            if hasattr(self, 'start_button'):
+                 self.start_button.config(state="normal" if not self.is_scalping else "disabled")
+        else:
+            final_status_text += " (Waiting...)"
+            current_fg_color = "orange"
+            if hasattr(self, 'start_button'):
+                 self.start_button.config(state="disabled")
+
+        self.data_readiness_var.set(final_status_text)
+        if hasattr(self, 'data_readiness_label'):
+            self.data_readiness_label.config(foreground=current_fg_color)
+
+        if not execute_now:
+            self.after(2000, self._update_data_readiness_display) # Poll every 2 seconds
+
 
     def populate_symbols_dropdown(self, symbol_names: List[str]):
         """Updates the symbol dropdown with the given list of names."""
