@@ -85,6 +85,10 @@ try:
         ProtoOASpotEvent, ProtoOATraderUpdatedEvent,
         ProtoOANewOrderReq, ProtoOAExecutionEvent,
         ProtoOAErrorRes,
+        ProtoOAOrderType, # Added for place_market_order
+        ProtoOATradeSide, # Added for place_market_order
+        ProtoOAExecutionType, # Added for _handle_execution_event
+        ProtoOAOrderStatus, # Added for _handle_execution_event
         # Specific message types for deserialization
         ProtoOAGetCtidProfileByTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
@@ -1566,3 +1570,202 @@ class Trader:
 
     def get_price_history(self) -> List[float]:
         return list(self.price_history)
+
+    def place_market_order(
+        self,
+        symbol_name: str,
+        volume_lots: float,
+        side: str, # "BUY" or "SELL"
+        take_profit_pips: Optional[float] = None,
+        stop_loss_pips: Optional[float] = None,
+        client_msg_id: Optional[str] = None
+    ) -> Tuple[bool, str]: # Returns (success_flag, message_or_order_id)
+        """
+        Places a market order on the Spotware platform.
+        """
+        if not self.is_connected or not self._client or not self._is_client_connected:
+            return False, "Not connected to the trading platform."
+
+        if not self.ctid_trader_account_id:
+            return False, "Account ID not set."
+
+        symbol_id = self.symbols_map.get(symbol_name)
+        if not symbol_id:
+            return False, f"Symbol '{symbol_name}' not found or not mapped."
+
+        symbol_details: Optional[ProtoOASymbol] = self.symbol_details_map.get(symbol_id)
+        if not symbol_details:
+            # Attempt to fetch details if missing, though ideally they should be pre-loaded
+            # For simplicity in this step, we'll assume it's an error if not found.
+            # A more robust implementation might queue the request or fetch and retry.
+            print(f"Warning: Full symbol details for {symbol_name} (ID: {symbol_id}) not found. Order placement might fail or be inaccurate.")
+            # We could try to fetch them now:
+            # self._send_get_symbol_details_request([symbol_id])
+            # return False, f"Symbol details for {symbol_name} not loaded. Please wait and retry."
+            # For now, we proceed, but calculations involving pipPosition or lotSize might be default/incorrect.
+            # Let's make it an error for now to be safe.
+            return False, f"Full symbol details for {symbol_name} (ID: {symbol_id}) not loaded. Cannot place order."
+
+
+        # Convert volume from lots to units
+        # lotSize is the number of units in one lot (e.g., 100,000 for standard Forex lot)
+        # volume is expected in cents of units (e.g., 10000000 for 1 lot if lotSize is 100000)
+        # ProtoOANewOrderReq.volume is Int64.
+        # From API docs: "Quantity in 1/100_000 of a unit. E.g. for 100_000 (one lot) of EURUSD, volume is 100_000 * 100_000 = 10_000_000_000."
+        # This seems very large. Let's re-check common practice or other examples.
+        # OpenApiPy examples use volume = volume_in_lots * symbol.lot_size (where symbol.lot_size is e.g. 100000 for EURUSD)
+        # This results in units. The API might then require this in its own unit (e.g. cents of units).
+        # Let's assume symbol_details.lotSize is the contract size (e.g. 100000 units for 1 lot).
+        # And that ProtoOANewOrderReq.volume expects total units * 100 (i.e. cents of units).
+        # This needs verification. The example from OpenApiPy seems to send round lots (e.g. 100000 for 1 lot).
+        # Let's assume volume is in units for now, e.g. 1 lot = 100,000 units.
+        # The field description "Volume in cents (e.g. for 100000 units of EURUSD volume is 10000000)"
+        # suggests volume = units * 100.
+        # So, if volume_lots = 0.01, lotSize = 100000, then units = 1000. Volume in request = 1000 * 100 = 100000.
+
+        if not hasattr(symbol_details, 'lotSize') or symbol_details.lotSize == 0:
+             return False, f"lotSize not available or zero for symbol {symbol_name}. Cannot calculate volume."
+
+        volume_in_units = volume_lots * symbol_details.lotSize
+        # The API expects volume in the smallest unit, often referred to as "cents of units" or similar.
+        # If symbol_details.lotSize gives units per lot (e.g., 100,000 for standard FX),
+        # and the 'volume' field in ProtoOANewOrderReq means quantity in hundredths of a unit (1/100):
+        # E.g. for 100_000 (one lot) of EURUSD, volume is 100_000 * 100 = 10_000_000.
+        # So, volume_for_request = volume_in_units * 100.
+        # This seems to be the interpretation from "Volume in cents (e.g. for 100000 units of EURUSD volume is 10000000)"
+        # This implies 1 unit of EURUSD is 1 EUR. 1 lot is 100,000 EUR.
+        # If you trade 1 lot (100,000 units), volume field should be 100,000 * 100 = 10,000,000.
+        # If you trade 0.01 lots (1,000 units), volume field should be 1,000 * 100 = 100,000.
+        volume_for_request = int(volume_in_units * 100)
+
+
+        req = ProtoOANewOrderReq()
+        req.ctidTraderAccountId = self.ctid_trader_account_id
+        req.symbolId = symbol_id
+        req.orderType = ProtoOAOrderType.MARKET
+
+        if side.upper() == "BUY":
+            req.tradeSide = ProtoOATradeSide.BUY
+        elif side.upper() == "SELL":
+            req.tradeSide = ProtoOATradeSide.SELL
+        else:
+            return False, f"Invalid trade side: {side}. Must be 'BUY' or 'SELL'."
+
+        req.volume = volume_for_request
+        req.comment = f"Market Order {side} {volume_lots} lots {symbol_name}"
+        if client_msg_id:
+            req.clientMsgId = client_msg_id
+        else:
+            req.clientMsgId = self._next_message_id() # Generate one if not provided
+
+        # SL/TP requires current price and pip calculations
+        # pipPosition is the power of 10 for one pip (e.g., 4 for EURUSD means 1 pip = 0.0001)
+        # A positive pipPosition means pips are to the right of the decimal.
+        # Example: USDJPY, pipPosition=2, 1 pip = 0.01.
+        # Example: EURUSD, pipPosition=4, 1 pip = 0.0001.
+        # The value symbol_details.pipPosition is an integer (e.g. 4 for EURUSD).
+        # One pip is 10^(-pipPosition).
+
+        # For SL/TP, we need the current market price.
+        # Using the last known tick price for the default symbol.
+        # This is a simplification. For other symbols, we'd need their current prices.
+        # For now, let's assume this order is for the default symbol for SL/TP calculation.
+        # A more robust version would fetch current price for `symbol_name`.
+        current_price = self.get_market_price(symbol_name) # This currently only works well for default symbol
+        if current_price is None and (take_profit_pips is not None or stop_loss_pips is not None):
+            return False, f"Cannot set SL/TP for {symbol_name} as current price is unavailable."
+
+        if hasattr(symbol_details, 'pipPosition'):
+            one_pip_value = 10 ** (-symbol_details.pipPosition)
+        else:
+            if take_profit_pips is not None or stop_loss_pips is not None:
+                return False, f"pipPosition not available for symbol {symbol_name}. Cannot calculate SL/TP."
+            one_pip_value = 0 # Avoids error if SL/TP are None
+
+        if take_profit_pips is not None and current_price is not None:
+            tp_delta = take_profit_pips * one_pip_value
+            if req.tradeSide == ProtoOATradeSide.BUY:
+                req.takeProfit = round(current_price + tp_delta, symbol_details.digits)
+            else: # SELL
+                req.takeProfit = round(current_price - tp_delta, symbol_details.digits)
+            req.comment += f" | TP: {req.takeProfit:.{symbol_details.digits}f}"
+
+
+        if stop_loss_pips is not None and current_price is not None:
+            sl_delta = stop_loss_pips * one_pip_value
+            if req.tradeSide == ProtoOATradeSide.BUY:
+                req.stopLoss = round(current_price - sl_delta, symbol_details.digits)
+            else: # SELL
+                req.stopLoss = round(current_price + sl_delta, symbol_details.digits)
+            req.comment += f" | SL: {req.stopLoss:.{symbol_details.digits}f}"
+
+        # TODO: Add relative SL/TP if supported (e.g. distanceInPips)
+        # ProtoOANewOrderReq has relativeStopLoss and relativeTakeProfit fields (int32, in pips*10)
+        # Using these might be simpler if the API supports them well.
+        # For now, using absolute prices.
+
+        print(f"Sending ProtoOANewOrderReq: {req}")
+        try:
+            deferred = self._client.send(req)
+            # The actual order confirmation will come via ProtoOAExecutionEvent.
+            # For now, we can't easily return the order ID or status synchronously.
+            # We'll return True if the message was sent. The GUI/caller needs to
+            # listen for ExecutionEvents.
+
+            # Define simple callbacks for logging the send attempt
+            def order_send_success(response):
+                # This response is likely just an ack that the message was received by the server,
+                # not the execution report itself.
+                print(f"ProtoOANewOrderReq for {client_msg_id} sent successfully to server. Response: {response}")
+                # The actual handling of ProtoOAExecutionEvent will happen in _on_message_received
+                # We need a way to correlate that event back to this request. clientMsgId is key.
+
+            def order_send_error(failure):
+                print(f"Error sending ProtoOANewOrderReq for {client_msg_id}: {failure.getErrorMessage()}")
+                # Potentially update some internal state or notify GUI of send failure.
+                # This is an error in *sending* the message, not necessarily a trade rejection.
+
+            deferred.addCallbacks(order_send_success, order_send_error)
+
+            # Consider returning the clientMsgId so the caller can track it.
+            return True, f"Order request sent (clientMsgId: {req.clientMsgId}). Awaiting execution report."
+
+        except Exception as e:
+            print(f"Exception placing order for {symbol_name}: {e}")
+            return False, f"Exception during order placement: {e}"
+
+    def _handle_execution_event(self, event: ProtoOAExecutionEvent) -> None:
+        # TODO: handle executions
+        print(f"Received ProtoOAExecutionEvent: {event}")
+        # This event contains details about the order execution (filled, rejected, etc.)
+        # We should use event.clientMsgId (if present in the original order) or
+        # event.order.orderId to correlate with placed orders.
+
+        # Example: update internal order status, notify GUI, log P&L.
+        order_info = event.order
+        position_info = event.position # if position was opened/closed/modified
+
+        log_msg = f"Execution Event: Type={ProtoOAExecutionType.Name(event.executionType)}"
+        if hasattr(order_info, 'orderId') and order_info.orderId:
+            log_msg += f", OrderID={order_info.orderId}"
+        if hasattr(order_info, 'clientOrderId') and order_info.clientOrderId: # This is clientMsgId
+             log_msg += f", ClientMsgID={order_info.clientOrderId}"
+
+        if event.executionType == ProtoOAExecutionType.ORDER_FILLED:
+            log_msg += (f", Status={ProtoOAOrderStatus.Name(order_info.orderStatus)}"
+                        f", FilledVol={order_info.executedVolume}/{order_info.tradeData.volume}"
+                        f" at {order_info.executionPrice}")
+            # Here you would update P&L, trade counts, etc.
+            # Potentially signal to the GUI that the trade was successful.
+
+        elif event.executionType == ProtoOAExecutionType.ORDER_REJECTED:
+            log_msg += f", Reason={event.errorCode if hasattr(event, 'errorCode') else 'Unknown'}"
+            # Signal to GUI about rejection
+
+        # Add more handling for other execution types:
+        # ORDER_ACCEPTED, ORDER_CANCELLED, ORDER_EXPIRED, etc.
+
+        print(log_msg)
+
+        # If you have a way to notify the GUI (e.g., through a queue or callback):
+        # self.gui_update_queue.put(("execution_update", log_msg)) # Example

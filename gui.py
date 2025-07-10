@@ -535,23 +535,58 @@ class TradingPage(ttk.Frame):
             return
 
         # Here you’d call self.trader.place_market_order(...) if real.
-        import random
-        result = round(random.uniform(-tp/2, tp), 2)
+        # Determine TP/SL: Prioritize strategy's dynamic offsets if provided.
+        # The strategy returns offsets (pips from current price), GUI has absolute pips.
+        # The place_market_order method expects pips.
 
-        # update session stats
-        self.total_pnl    += result
-        self.total_trades += 1
-        if result > 0:
-            self.wins += 1
+        # For now, let's assume strategy's sl_offset and tp_offset are in pips.
+        # If strategy provides them, use them. Otherwise, use GUI's tp/sl values.
+        final_tp_pips = tp_offset_strategy if tp_offset_strategy is not None else tp_pips_gui
+        final_sl_pips = sl_offset_strategy if sl_offset_strategy is not None else sl_pips_gui
 
-        # update UI vars
-        self.pnl_var.set(f"{self.total_pnl:.2f}")
-        self.trades_var.set(str(self.total_trades))
-        win_rate = (int(self.wins / self.total_trades * 100)
-                    if self.total_trades else 0)
-        self.win_rate_var.set(f"{win_rate}%")
+        self._log(f"Attempting to place market order: {side.upper()} {size} lots of {symbol} at market price.")
+        if final_tp_pips is not None:
+            self._log(f"  with TP: {final_tp_pips} pips")
+        if final_sl_pips is not None:
+            self._log(f"  with SL: {final_sl_pips} pips")
+        if strategy_comment:
+            self._log(f"  Strategy comment: {strategy_comment}")
 
-        self._log(f"Result: {result:+.2f} pips | Total P&L: {self.total_pnl:+.2f}")
+        success, message = self.trader.place_market_order(
+            symbol_name=symbol,
+            volume_lots=size,
+            side=side,
+            take_profit_pips=final_tp_pips,
+            stop_loss_pips=final_sl_pips
+            # client_msg_id could be generated here if needed for GUI-specific tracking
+        )
+
+        if success:
+            self._log(f"Order request successful: {message}")
+            # Trade counting will now depend on execution events, not immediate success here.
+            # self.total_trades += 1 # Incrementing this here might be premature.
+            # self.trades_var.set(str(self.total_trades)) # Update will come from execution handler.
+        else:
+            self._log(f"Order request failed: {message}")
+            # Optionally, show a messagebox error to the user for immediate feedback on failure to send
+            # messagebox.showerror("Order Placement Failed", f"Could not send order: {message}")
+
+
+        # P&L and win rate updates will now be driven by actual execution reports.
+        # For now, we remove the fake P&L update from here.
+        # The GUI will be updated when ProtoOAExecutionEvent is received and processed.
+        # self.total_pnl    += result # Fake
+        # if result > 0: # Fake
+        #     self.wins += 1 # Fake
+
+        # # update UI vars - These will be updated by a different mechanism
+        # self.pnl_var.set(f"{self.total_pnl:.2f}")
+        # self.trades_var.set(str(self.total_trades)) # Number of trades sent, not necessarily filled
+        # win_rate = (int(self.wins / self.total_trades * 100)
+        #             if self.total_trades else 0)
+        # self.win_rate_var.set(f"{win_rate}%")
+
+        # self._log(f"Result: {result:+.2f} pips | Total P&L: {self.total_pnl:+.2f}") # Fake
 
     def _log(self, msg: str):
         ts = time.strftime("%H:%M:%S")
