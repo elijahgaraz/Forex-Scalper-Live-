@@ -85,10 +85,6 @@ try:
         ProtoOASpotEvent, ProtoOATraderUpdatedEvent,
         ProtoOANewOrderReq, ProtoOAExecutionEvent,
         ProtoOAErrorRes,
-        ProtoOAOrderType, # Added for place_market_order
-        ProtoOATradeSide, # Added for place_market_order
-        ProtoOAExecutionType, # Added for _handle_execution_event
-        ProtoOAOrderStatus, # Added for _handle_execution_event
         # Specific message types for deserialization
         ProtoOAGetCtidProfileByTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
@@ -97,7 +93,13 @@ try:
     )
     # ProtoOALightSymbol is implicitly used by ProtoOASymbolsListRes
     # ProtoOASymbol is used by ProtoOASymbolByIdRes and for our symbol_details_map value type
-    from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrader, ProtoOASymbol
+    from ctrader_open_api.messages.OpenApiModelMessages_pb2 import (
+        ProtoOATrader, ProtoOASymbol,
+        ProtoOAOrderType,      # Moved for place_market_order
+        ProtoOATradeSide,      # Moved for place_market_order
+        ProtoOAExecutionType,  # Moved for _handle_execution_event
+        ProtoOAOrderStatus     # Moved for _handle_execution_event
+    )
     USE_OPENAPI_LIB = True
 except ImportError as e:
     print(f"ctrader-open-api import failed ({e}); running in mock mode.")
