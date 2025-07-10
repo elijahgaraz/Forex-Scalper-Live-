@@ -89,7 +89,9 @@ try:
         ProtoOAGetCtidProfileByTokenRes,
         ProtoOAGetCtidProfileByTokenReq,
         ProtoOASymbolsListReq, ProtoOASymbolsListRes, # For fetching symbol list (light symbols)
-        ProtoOASymbolByIdReq, ProtoOASymbolByIdRes    # For fetching full symbol details
+        ProtoOASymbolByIdReq, ProtoOASymbolByIdRes,    # For fetching full symbol details
+        ProtoOAGetTrendbarsReq, # Added for historical data
+        ProtoOAGetTrendbarsRes  # Added for historical data
     )
     # ProtoOALightSymbol is implicitly used by ProtoOASymbolsListRes
     # ProtoOASymbol is used by ProtoOASymbolByIdRes and for our symbol_details_map value type
@@ -98,7 +100,8 @@ try:
         ProtoOAOrderType,      # Moved for place_market_order
         ProtoOATradeSide,      # Moved for place_market_order
         ProtoOAExecutionType,  # Moved for _handle_execution_event
-        ProtoOAOrderStatus     # Moved for _handle_execution_event
+        ProtoOAOrderStatus,     # Moved for _handle_execution_event
+        ProtoOATrendbarPeriod  # Added for historical data
     )
     USE_OPENAPI_LIB = True
 except ImportError as e:
@@ -323,8 +326,11 @@ class Trader:
             self._handle_spot_event(actual_message) # Potentially noisy
             # print("  Received ProtoOASpotEvent (handler commented out).")
         elif isinstance(actual_message, ProtoOAExecutionEvent):
-            # self._handle_execution_event(actual_message) # Potentially noisy
-             print("  Received ProtoOAExecutionEvent (handler commented out).")
+            self._handle_execution_event(actual_message)
+            # print("  Received ProtoOAExecutionEvent (handler commented out).")
+        elif isinstance(actual_message, ProtoOAGetTrendbarsRes):
+            print("  Dispatching to _handle_get_trendbars_response")
+            self._handle_get_trendbars_response(actual_message)
         elif isinstance(actual_message, ProtoHeartbeatEvent):
             print("  Received heartbeat.")
         elif isinstance(actual_message, ProtoOAErrorRes): # Specific OA error
@@ -599,10 +605,23 @@ class Trader:
 
             # Ensure ctidTraderAccountId is available before subscribing
             if self.ctid_trader_account_id is not None:
+                # Fetch historical data for 1m timeframe for the default symbol
+                # Assuming M1 is ProtoOATrendbarPeriod.M1
+                # Fetch max_ohlc_history_len bars (e.g., 200)
+                print(f"Fetching initial historical 1m trendbars for default symbol {default_symbol_name_for_logging} (ID: {self.default_symbol_id}).")
+                self._send_get_trendbars_request(
+                    symbol_id=self.default_symbol_id,
+                    period=ProtoOATrendbarPeriod.M1, # Assuming M1 is the desired period
+                    count=self.max_ohlc_history_len
+                )
+                # Note: We might want to fetch for other timeframes too if strategies use them.
+                # For now, focusing on '1m'.
+
+                # After requesting historical data, subscribe to live spots
                 self._send_subscribe_spots_request(self.ctid_trader_account_id, [self.default_symbol_id])
                 self.subscribed_spot_symbol_ids.add(self.default_symbol_id)
             else:
-                print(f"Error: ctidTraderAccountId not set. Cannot subscribe to spots for {default_symbol_name}.")
+                print(f"Error: ctidTraderAccountId not set. Cannot subscribe to spots or fetch history for {default_symbol_name_for_logging}.")
                 self._last_error = "ctidTraderAccountId not available for spot subscription after getting symbol details."
         elif self.default_symbol_id is not None:
             # This case should ideally not be hit if ProtoOASymbolByIdReq was successful for default_symbol_id
@@ -1769,7 +1788,9 @@ class Trader:
             # Potentially signal to the GUI that the trade was successful.
 
         elif event.executionType == ProtoOAExecutionType.ORDER_REJECTED:
-            log_msg += f", Reason={event.errorCode if hasattr(event, 'errorCode') else 'Unknown'}"
+            log_msg += f", Reason={event.errorCode if hasattr(event, 'errorCode') else 'Unknown'}" # Use .errorCode for rejection reason
+            if hasattr(event, 'description') and event.description: # Check if description field exists and is not empty
+                log_msg += f" - {event.description}"
             # Signal to GUI about rejection
 
         # Add more handling for other execution types:
@@ -1779,3 +1800,133 @@ class Trader:
 
         # If you have a way to notify the GUI (e.g., through a queue or callback):
         # self.gui_update_queue.put(("execution_update", log_msg)) # Example
+
+
+    def _send_get_trendbars_request(self, symbol_id: int, period: ProtoOATrendbarPeriod, count: int) -> None:
+        if not self._ensure_valid_token():
+            return
+        if not self._client or not self._is_client_connected:
+            self._last_error = "Cannot get trendbars: Client not connected."
+            print(self._last_error)
+            return
+        if not self.ctid_trader_account_id:
+            self._last_error = "Cannot get trendbars: ctidTraderAccountId is not set."
+            print(self._last_error)
+            return
+
+        print(f"Requesting {count} trendbars for symbol ID {symbol_id}, period {ProtoOATrendbarPeriod.Name(period)}")
+
+        req = ProtoOAGetTrendbarsReq()
+        req.ctidTraderAccountId = self.ctid_trader_account_id
+        req.symbolId = symbol_id
+        req.period = period
+        # Request 'count' bars ending now. API usually wants 'toTimestamp' and 'count'.
+        # If 'fromTimestamp' is also set, it might override 'count'.
+        # Let's use toTimestamp = now, and specify count.
+        req.toTimestamp = int(time.time() * 1000) # Milliseconds UTC
+        req.count = count
+
+        print(f"Sending ProtoOAGetTrendbarsReq: {req}")
+        try:
+            d = self._client.send(req)
+            # Callback will be _handle_get_trendbars_response via _on_message_received
+            d.addErrback(self._handle_send_error) # Generic error handler for send issues
+            print("Added errback to ProtoOAGetTrendbarsReq Deferred.")
+        except Exception as e:
+            print(f"Exception during _send_get_trendbars_request send command: {e}")
+            self._last_error = f"Exception sending trendbars request: {e}"
+
+    def _handle_get_trendbars_response(self, response: ProtoOAGetTrendbarsRes) -> None:
+        print(f"Received ProtoOAGetTrendbarsRes for symbol ID {response.symbolId}, period {ProtoOATrendbarPeriod.Name(response.period)} with {len(response.trendbar)} bars.")
+
+        symbol_id = response.symbolId
+        period_enum = response.period # This is the ProtoOATrendbarPeriod enum value
+
+        # Determine timeframe string (e.g., '1m', '15s') from period_enum
+        # This requires a mapping from ProtoOATrendbarPeriod to our string keys
+        tf_str_map = {
+            ProtoOATrendbarPeriod.M1: '1m',
+            ProtoOATrendbarPeriod.M5: '5m',
+            # Add other mappings as needed based on what self.timeframes_seconds supports
+            # For now, we are primarily interested in '1m' for SafeStrategy example.
+            # Other strategies might use different periods.
+            # We also need to map '15s' if we want to fetch it.
+            # ProtoOATrendbarPeriod does not have a direct 'S15' or similar.
+            # Smallest standard is M1. If we need 15s bars, they must be built from ticks.
+        }
+        tf_str = tf_str_map.get(period_enum)
+        if not tf_str:
+            print(f"Warning: Received trendbars for unmapped period {ProtoOATrendbarPeriod.Name(period_enum)}. Cannot process.")
+            return
+
+        symbol_details = self.symbol_details_map.get(symbol_id)
+        if not symbol_details or not hasattr(symbol_details, 'digits'):
+            print(f"Warning: Symbol details (especially digits) not found for symbol ID {symbol_id}. Cannot accurately process trendbar prices.")
+            return
+
+        price_scale_factor = 10**symbol_details.digits
+
+        processed_bars = []
+        for bar_data in response.trendbar:
+            # Prices in ProtoOATrendbar: low is absolute. deltaOpen, deltaClose, deltaHigh are diffs from low.
+            # All need scaling.
+            # Timestamp is utcTimestampInMinutes for M1+, or utcTimestampInSeconds for tick-based bars (not used here)
+            # For M1, utcTimestampInMinutes * 60 * 1000 should give milliseconds timestamp.
+
+            ts_millis = bar_data.utcTimestampInMinutes * 60 * 1000
+            dt_object = datetime.fromtimestamp(ts_millis / 1000, tz=timezone.utc)
+
+            low_price = bar_data.low / price_scale_factor
+            open_price = (bar_data.low + bar_data.deltaOpen) / price_scale_factor
+            high_price = (bar_data.low + bar_data.deltaHigh) / price_scale_factor
+            close_price = (bar_data.low + bar_data.deltaClose) / price_scale_factor
+
+            processed_bars.append({
+                'timestamp': dt_object,
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': bar_data.volume
+            })
+
+        if not processed_bars:
+            print(f"No bars processed from ProtoOAGetTrendbarsRes for {tf_str}.")
+            return
+
+        # Sort bars by timestamp just in case API doesn't guarantee it (it usually does)
+        processed_bars.sort(key=lambda x: x['timestamp'])
+
+        new_df = pd.DataFrame(processed_bars)
+
+        # Initialize or prepend to existing history
+        # For simplicity, we'll overwrite if called again, assuming this is for initial fill.
+        # A more complex merge could be done if fetching partial history later.
+        self.ohlc_history[tf_str] = new_df
+        print(f"Populated {tf_str} OHLC history with {len(new_df)} bars for symbol ID {symbol_id}. Last bar timestamp: {new_df.iloc[-1]['timestamp'] if not new_df.empty else 'N/A'}")
+
+        # After populating, we might need to adjust self.current_bars[tf_str]
+        # so that live tick aggregation starts correctly after the last historical bar.
+        if not new_df.empty:
+            last_hist_bar = new_df.iloc[-1]
+            # Set current_bar to reflect the state *as if* the last historical bar just completed.
+            # The next tick will then either update this (if it falls in the same interval) or form a new one.
+            # This logic needs to be very careful to align with how _handle_spot_event initializes a new bar.
+
+            # For now, let's ensure current_bars is reset for this tf_str so that _handle_spot_event
+            # will correctly initialize based on the *next* incoming tick relative to the last historical bar.
+            # Or, more simply, the _handle_spot_event logic should already be robust enough if
+            # ohlc_history has data.
+            # The key is that current_bars[tf_str]['timestamp'] should allow the next tick to form a new bar
+            # *after* the last historical bar's period.
+
+            # Let's clear current_bar for this timeframe.
+            # The _handle_spot_event logic will then take the first tick *after* these historical bars
+            # and create a new current_bar based on its timestamp.
+            self.current_bars[tf_str] = {
+                'timestamp': None, 'open': None, 'high': None, 'low': None, 'close': None, 'volume': 0
+            }
+            print(f"Reset current_bar for {tf_str} to allow live aggregation post-history fetch.")
+
+        # Potentially, trigger a GUI update for data readiness explicitly here if needed,
+        # though the periodic GUI poll should pick it up.
