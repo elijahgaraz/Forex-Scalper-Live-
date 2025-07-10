@@ -1573,6 +1573,14 @@ class Trader:
     def get_price_history(self) -> List[float]:
         return list(self.price_history)
 
+    def get_ohlc_bar_counts(self) -> Dict[str, int]:
+        """Returns a dictionary with the count of available OHLC bars for each timeframe."""
+        counts = {}
+        for tf_str, df_history in self.ohlc_history.items():
+            # df_history is a DataFrame, len(df_history) gives the number of rows (bars)
+            counts[tf_str] = len(df_history)
+        return counts
+
     def place_market_order(
         self,
         symbol_name: str,

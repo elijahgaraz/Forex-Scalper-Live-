@@ -17,6 +17,12 @@ class Strategy(ABC):
             'tp_offset': None
         }
 
+    @abstractmethod
+    def get_required_bars(self) -> Dict[str, int]:
+        """Returns a dict of {'timeframe_str': count} required by the strategy."""
+        # Default implementation, subclasses should override if they have requirements.
+        return {}
+
 class SafeStrategy(Strategy):
     """
     Enhanced Safe (Low-Risk) Trend-Following Scalper with:
@@ -49,6 +55,9 @@ class SafeStrategy(Strategy):
         self.session_end = session_end
         # Trailing stop state
         self.trailing_activated = False
+
+    def get_required_bars(self) -> Dict[str, int]:
+        return {'1m': max(self.ema_period, self.atr_period)}
 
     def in_session(self, timestamp: pd.Timestamp) -> bool:
         t = timestamp.time()
@@ -134,9 +143,12 @@ class ModerateStrategy(Strategy):
         self.stop_multiplier = 1.5
         self.target_multiplier = 1.0
 
+    def get_required_bars(self) -> Dict[str, int]:
+        return {'1m': max(self.ema_period, self.atr_period)}
+
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < self.ema_period:
+        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -164,9 +176,12 @@ class AggressiveStrategy(Strategy):
         self.stop_multiplier = 2.0
         self.target_multiplier = 1.5
 
+    def get_required_bars(self) -> Dict[str, int]:
+        return {'1m': max(self.ema_period, self.atr_period)}
+
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < self.ema_period:
+        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -195,9 +210,12 @@ class MomentumStrategy(Strategy):
         self.stop_multiplier = 1.0
         self.target_multiplier = 1.5
 
+    def get_required_bars(self) -> Dict[str, int]:
+        return {'1m': max(self.ema_period, self.atr_period)}
+
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < self.ema_period:
+        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -227,9 +245,12 @@ class MeanReversionStrategy(Strategy):
         self.stop_multiplier = 1.0
         self.target_multiplier = 2.0
 
+    def get_required_bars(self) -> Dict[str, int]:
+        return {'1m': max(self.ema_period, self.atr_period)}
+
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < self.ema_period:
+        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
