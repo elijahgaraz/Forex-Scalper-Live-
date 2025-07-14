@@ -35,6 +35,7 @@ class SafeStrategy(Strategy):
     NAME = "Safe (Low-Risk) Trend-Following Scalper"
 
     def __init__(self,
+                 settings,
                  ema_period: int = 50,
                  atr_period: int = 14,
                  stop_mult: float = 1.0,
@@ -44,6 +45,7 @@ class SafeStrategy(Strategy):
                  session_start: time = time(8, 0),
                  session_end: time = time(16, 0)):
         # Trend & volatility settings
+        self.settings = settings
         self.ema_period = ema_period
         self.atr_period = atr_period
         self.stop_mult = stop_mult
@@ -57,7 +59,7 @@ class SafeStrategy(Strategy):
         self.trailing_activated = False
 
     def get_required_bars(self) -> Dict[str, int]:
-        return {'1m': max(self.ema_period, self.atr_period)}
+        return {'1m': self.settings.general.min_bars_for_trading}
 
     def in_session(self, timestamp: pd.Timestamp) -> bool:
         t = timestamp.time()
@@ -74,7 +76,7 @@ class SafeStrategy(Strategy):
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
         # Startup check: require enough bars for EMA and ATR (removed +1 to activate at exact availability)
-        if df is None or len(df) < max(self.ema_period, self.atr_period):
+        if df is None or len(df) < self.settings.general.min_bars_for_trading:
             return self._hold("insufficient data")
 
         # Session filter
@@ -137,18 +139,19 @@ class SafeStrategy(Strategy):
 
 class ModerateStrategy(Strategy):
     NAME = "Moderate Trend-Following Scalper"
-    def __init__(self):
+    def __init__(self, settings):
+        self.settings = settings
         self.ema_period = 20
         self.atr_period = 14
         self.stop_multiplier = 1.5
         self.target_multiplier = 1.0
 
     def get_required_bars(self) -> Dict[str, int]:
-        return {'1m': max(self.ema_period, self.atr_period)}
+        return {'1m': self.settings.general.min_bars_for_trading}
 
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
+        if df is None or len(df) < self.settings.general.min_bars_for_trading:
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -170,18 +173,19 @@ class ModerateStrategy(Strategy):
 
 class AggressiveStrategy(Strategy):
     NAME = "Aggressive Trend-Following Scalper"
-    def __init__(self):
+    def __init__(self, settings):
+        self.settings = settings
         self.ema_period = 10
         self.atr_period = 7
         self.stop_multiplier = 2.0
         self.target_multiplier = 1.5
 
     def get_required_bars(self) -> Dict[str, int]:
-        return {'1m': max(self.ema_period, self.atr_period)}
+        return {'1m': self.settings.general.min_bars_for_trading}
 
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
+        if df is None or len(df) < self.settings.general.min_bars_for_trading:
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -203,7 +207,8 @@ class AggressiveStrategy(Strategy):
 
 class MomentumStrategy(Strategy):
     NAME = "Momentum Fade Scalper"
-    def __init__(self):
+    def __init__(self, settings):
+        self.settings = settings
         self.ema_period = 20
         self.atr_period = 14
         self.fade_threshold = 1.5  # ATR multiples
@@ -211,11 +216,11 @@ class MomentumStrategy(Strategy):
         self.target_multiplier = 1.5
 
     def get_required_bars(self) -> Dict[str, int]:
-        return {'1m': max(self.ema_period, self.atr_period)}
+        return {'1m': self.settings.general.min_bars_for_trading}
 
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
+        if df is None or len(df) < self.settings.general.min_bars_for_trading:
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]
@@ -238,7 +243,8 @@ class MomentumStrategy(Strategy):
 
 class MeanReversionStrategy(Strategy):
     NAME = "Mean-Reversion Scalper"
-    def __init__(self):
+    def __init__(self, settings):
+        self.settings = settings
         self.ema_period = 20
         self.atr_period = 14
         self.band_multiplier = 2.0  # ATR multiples
@@ -246,11 +252,11 @@ class MeanReversionStrategy(Strategy):
         self.target_multiplier = 2.0
 
     def get_required_bars(self) -> Dict[str, int]:
-        return {'1m': max(self.ema_period, self.atr_period)}
+        return {'1m': self.settings.general.min_bars_for_trading}
 
     def decide(self, data: Dict[str, Any]) -> Dict[str, Any]:
         df: pd.DataFrame = data.get('ohlc_1m')
-        if df is None or len(df) < max(self.ema_period, self.atr_period): # Changed to max
+        if df is None or len(df) < self.settings.general.min_bars_for_trading:
             return {'action': 'hold', 'comment': f'{self.NAME}: insufficient data', 'sl_offset': None, 'tp_offset': None}
 
         ema = calculate_ema(df['close'], self.ema_period).iloc[-1]

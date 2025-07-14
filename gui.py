@@ -387,11 +387,11 @@ class TradingPage(ttk.Frame):
 
         # Instantiate the selected strategy to get its requirements
         # This could be optimized by caching strategy instances or their requirements
-        if selected_strategy_name == "Safe": strategy_instance = SafeStrategy()
-        elif selected_strategy_name == "Moderate": strategy_instance = ModerateStrategy()
-        elif selected_strategy_name == "Aggressive": strategy_instance = AggressiveStrategy()
-        elif selected_strategy_name == "Momentum": strategy_instance = MomentumStrategy()
-        elif selected_strategy_name == "Mean Reversion": strategy_instance = MeanReversionStrategy()
+        if selected_strategy_name == "Safe": strategy_instance = SafeStrategy(self.controller.settings)
+        elif selected_strategy_name == "Moderate": strategy_instance = ModerateStrategy(self.controller.settings)
+        elif selected_strategy_name == "Aggressive": strategy_instance = AggressiveStrategy(self.controller.settings)
+        elif selected_strategy_name == "Momentum": strategy_instance = MomentumStrategy(self.controller.settings)
+        elif selected_strategy_name == "Mean Reversion": strategy_instance = MeanReversionStrategy(self.controller.settings)
 
         if not strategy_instance:
             self.data_readiness_var.set("Select a strategy")
@@ -511,15 +511,15 @@ class TradingPage(ttk.Frame):
         # instantiate strategy
         sel = self.strategy_var.get()
         if sel == "Safe":
-            strategy = SafeStrategy()
+            strategy = SafeStrategy(self.controller.settings)
         elif sel == "Moderate":
-            strategy = ModerateStrategy()
+            strategy = ModerateStrategy(self.controller.settings)
         elif sel == "Aggressive":
-            strategy = AggressiveStrategy()
+            strategy = AggressiveStrategy(self.controller.settings)
         elif sel == "Mean Reversion":
-            strategy = MeanReversionStrategy()
+            strategy = MeanReversionStrategy(self.controller.settings)
         else:
-            strategy = MomentumStrategy()
+            strategy = MomentumStrategy(self.controller.settings)
 
         # Snapshot GUI inputs on main thread
         symbol = self.symbol_var.get().replace("/", "")
