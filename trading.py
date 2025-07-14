@@ -134,7 +134,7 @@ class Trader:
         }
         self.current_bars = {} # Stores the currently forming bar for each timeframe
         self.ohlc_history = {} # Stores history of completed bars for each timeframe
-        self.max_ohlc_history_len = 200 # Max number of OHLC bars to keep per timeframe
+        self.max_ohlc_history_len = 500 # Max number of OHLC bars to keep per timeframe
 
         for tf_str in self.timeframes_seconds.keys():
             self.current_bars[tf_str] = {
@@ -336,9 +336,15 @@ class Trader:
         elif isinstance(actual_message, ProtoOAErrorRes): # Specific OA error
             print(f"  Dispatching to ProtoOAErrorRes handler. Error code: {actual_message.errorCode}, Description: {actual_message.description}")
             self._last_error = f"{actual_message.errorCode}: {actual_message.description}"
+            if "NOT_AUTHENTICATED" in actual_message.errorCode:
+                self._last_error += ". Please reconnect."
+                self.disconnect()
         elif isinstance(actual_message, ProtoErrorRes): # Common error
             print(f"  Dispatching to ProtoErrorRes (common) handler. Error code: {actual_message.errorCode}, Description: {actual_message.description}")
             self._last_error = f"Common Error {actual_message.errorCode}: {actual_message.description}"
+            if "NOT_AUTHENTICATED" in actual_message.errorCode:
+                self._last_error += ". Please reconnect."
+                self.disconnect()
         # Check if it's still the ProtoMessage wrapper (meaning Protobuf.extract didn't deserialize it further)
         elif isinstance(actual_message, ProtoMessage): # Covers actual_message is message (if message was ProtoMessage)
                                                        # and actual_message is the result of extract but still a wrapper.
@@ -925,56 +931,56 @@ class Trader:
             if len(self.price_history) > self.history_size:
                 self.price_history.pop(0)
 
-            # Build OHLC bars for each timeframe
-            for tf_str, tf_seconds in self.timeframes_seconds.items():
-                bar = self.current_bars[tf_str]
+            # # Build OHLC bars for each timeframe
+            # for tf_str, tf_seconds in self.timeframes_seconds.items():
+            #     bar = self.current_bars[tf_str]
 
-                # Initialize bar if empty
-                if bar['timestamp'] is None:
-                    start_ts = event_dt.replace(second=(event_dt.second // tf_seconds) * tf_seconds, microsecond=0)
-                    bar.update({
-                        'timestamp': start_ts,
-                        'open': current_price,
-                        'high': current_price,
-                        'low': current_price,
-                        'close': current_price,
-                        'volume': 1
-                    })
-                else:
-                    bar_end = bar['timestamp'] + pd.Timedelta(seconds=tf_seconds)
-                    if event_dt >= bar_end:
-                        # Finalize and store completed bar
-                        completed = {
-                            'timestamp': bar['timestamp'],
-                            'open': bar['open'],
-                            'high': bar['high'],
-                            'low': bar['low'],
-                            'close': bar['close'],
-                            'volume': bar['volume']
-                        }
-                        self.ohlc_history[tf_str] = pd.concat([
-                            self.ohlc_history[tf_str],
-                            pd.DataFrame([completed])
-                        ], ignore_index=True)
-                        # Trim history length
-                        if len(self.ohlc_history[tf_str]) > self.max_ohlc_history_len:
-                            self.ohlc_history[tf_str] = self.ohlc_history[tf_str].iloc[-self.max_ohlc_history_len:]
-                        # Start new bar
-                        start_ts = event_dt.replace(second=(event_dt.second // tf_seconds) * tf_seconds, microsecond=0)
-                        bar.update({
-                            'timestamp': start_ts,
-                            'open': current_price,
-                            'high': current_price,
-                            'low': current_price,
-                            'close': current_price,
-                            'volume': 1
-                        })
-                    else:
-                        # Update ongoing bar
-                        bar['high'] = max(bar['high'], current_price)
-                        bar['low'] = min(bar['low'], current_price)
-                        bar['close'] = current_price
-                        bar['volume'] += 1
+            #     # Initialize bar if empty
+            #     if bar['timestamp'] is None:
+            #         start_ts = event_dt.replace(second=(event_dt.second // tf_seconds) * tf_seconds, microsecond=0)
+            #         bar.update({
+            #             'timestamp': start_ts,
+            #             'open': current_price,
+            #             'high': current_price,
+            #             'low': current_price,
+            #             'close': current_price,
+            #             'volume': 1
+            #         })
+            #     else:
+            #         bar_end = bar['timestamp'] + pd.Timedelta(seconds=tf_seconds)
+            #         if event_dt >= bar_end:
+            #             # Finalize and store completed bar
+            #             completed = {
+            #                 'timestamp': bar['timestamp'],
+            #                 'open': bar['open'],
+            #                 'high': bar['high'],
+            #                 'low': bar['low'],
+            #                 'close': bar['close'],
+            #                 'volume': bar['volume']
+            #             }
+            #             self.ohlc_history[tf_str] = pd.concat([
+            #                 self.ohlc_history[tf_str],
+            #                 pd.DataFrame([completed])
+            #             ], ignore_index=True)
+            #             # Trim history length
+            #             if len(self.ohlc_history[tf_str]) > self.max_ohlc_history_len:
+            #                 self.ohlc_history[tf_str] = self.ohlc_history[tf_str].iloc[-self.max_ohlc_history_len:]
+            #             # Start new bar
+            #             start_ts = event_dt.replace(second=(event_dt.second // tf_seconds) * tf_seconds, microsecond=0)
+            #             bar.update({
+            #                 'timestamp': start_ts,
+            #                 'open': current_price,
+            #                 'high': current_price,
+            #                 'low': current_price,
+            #                 'close': current_price,
+            #                 'volume': 1
+            #             })
+            #         else:
+            #             # Update ongoing bar
+            #             bar['high'] = max(bar['high'], current_price)
+            #             bar['low'] = min(bar['low'], current_price)
+            #             bar['close'] = current_price
+            #             bar['volume'] += 1
 
         
     def get_available_symbol_names(self) -> List[str]:
