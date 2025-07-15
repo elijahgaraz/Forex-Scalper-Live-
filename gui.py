@@ -609,6 +609,8 @@ class TradingPage(ttk.Frame):
                        strategy_comment: str):
         """Runs on the Tk mainloop—safe to update UI."""
         price_str = f"{price:.5f}" if price is not None else "N/A (unknown)"
+        sl = sl_pips_gui
+        tp = tp_pips_gui
         self._log(f"{side.upper()} scalp: {symbol} at {price_str} | "
                   f"size={size} lots | SL={sl} pips | TP={tp} pips")
 
