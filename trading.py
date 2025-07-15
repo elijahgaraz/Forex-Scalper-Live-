@@ -1550,19 +1550,12 @@ class Trader:
     def get_account_summary(self) -> Dict[str, Any]:
         if not USE_OPENAPI_LIB:
             return {"account_id": "MOCK", "balance": 0.0, "equity": 0.0, "margin": 0.0}
-        if not self.is_connected:
-            # Return current values even if not fully "connected" but some data might be partially loaded
-            return {
-                "account_id": self.account_id if self.account_id else "connecting...",
-                "balance": self.balance,
-                "equity": self.equity,
-                "margin": self.used_margin
-            }
+
         return {
-            "account_id": self.account_id,
+            "account_id": self.account_id if self.account_id else "connecting...",
             "balance": self.balance,
             "equity": self.equity,
-            "margin": self.used_margin # This will be None initially, or updated from ProtoOATrader
+            "margin": self.used_margin
         }
 
     def get_market_price(self, symbol: str) -> Optional[float]:
